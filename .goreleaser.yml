@@ -1,0 +1,37 @@
+project_name: inaccel-cloud-init
+
+before:
+  hooks:
+  - go mod download
+builds:
+- binary: cloud-init
+  env:
+  - CGO_ENABLED=0
+  goarch:
+  - amd64
+  goos:
+  - linux
+  main: ./cmd
+
+archives:
+- files:
+  - none*
+  id: archive
+  name_template: "{{ .Os }}-{{ .Arch }}"
+checksum:
+  name_template: checksums.txt
+dockers:
+- build_flag_templates:
+  - "--label=org.opencontainers.image.authors=InAccel <info@inaccel.com>"
+  - "--label=org.opencontainers.image.created={{ .Date }}"
+  - "--label=org.opencontainers.image.description=InAccel is a product for you to build, ship and run hardware accelerated applications"
+  - "--label=org.opencontainers.image.licenses=Apache-2.0"
+  - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+  - "--label=org.opencontainers.image.source={{ .GitURL }}"
+  - "--label=org.opencontainers.image.title={{ .ProjectName }}"
+  - "--label=org.opencontainers.image.url=https://inaccel.com"
+  - "--label=org.opencontainers.image.vendor=InAccel"
+  - "--label=org.opencontainers.image.version={{ .RawVersion }}"
+  image_templates:
+  - inaccel/cloud-init:latest
+  - inaccel/cloud-init:{{ .RawVersion }}
