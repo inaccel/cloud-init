@@ -23,6 +23,8 @@ func init() {
 			return ctx
 		}
 
-		return context.WithValue(ctx, "api", api)
+		return context.WithValue(ctx, apiKey{}, api)
 	}
 }
+
+type apiKey struct{}

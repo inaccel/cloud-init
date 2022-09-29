@@ -17,10 +17,6 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-type CloudConfig struct {
-	InAccel corev1.ResourceList `yaml:"inaccel"`
-}
-
 func IsHostDevice(hostDevice kubevirtv1.HostDevice, deviceName string, index int) bool {
 	return hostDevice.Name == fmt.Sprintf("inaccel%d", index)
 }
@@ -32,6 +28,10 @@ func HostDevice(deviceName string, index int) kubevirtv1.HostDevice {
 	}
 }
 
+type CloudConfig struct {
+	InAccel corev1.ResourceList `yaml:"inaccel"`
+}
+
 type VirtualMachineInstanceDefaulter struct{}
 
 func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.Object) error {
@@ -40,7 +40,7 @@ func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.
 		return fmt.Errorf("virtual machine instance defaulter did not understand object: %T", obj)
 	}
 
-	api, ok := ctx.Value("api").(client.Client)
+	api, ok := ctx.Value(apiKey{}).(client.Client)
 	if !ok {
 		kube, err := config.GetConfig()
 		if err != nil {
@@ -82,11 +82,11 @@ func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.
 
 			defaultMode := corev1.SecretVolumeSourceDefaultMode
 			payload, err := secrets.MakePayload([]corev1.KeyToPath{
-				corev1.KeyToPath{
+				{
 					Key:  "userdata",
 					Path: filepath.Join(virtualMachineInstance.Spec.Volumes[i].Name, "userdata"),
 				},
-				corev1.KeyToPath{
+				{
 					Key:  "userData",
 					Path: filepath.Join(virtualMachineInstance.Spec.Volumes[i].Name, "userData"),
 				},
