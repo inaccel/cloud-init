@@ -35,3 +35,8 @@ dockers:
   image_templates:
   - inaccel/cloud-init:latest
   - inaccel/cloud-init:{{ .RawVersion }}
+release:
+  footer: |
+    ## Docker images
+
+    - `docker pull inaccel/cloud-init:{{ .RawVersion }}`
