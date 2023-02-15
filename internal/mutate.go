@@ -32,6 +32,116 @@ type CloudConfig struct {
 	InAccel corev1.ResourceList `yaml:"inaccel"`
 }
 
+type VirtualMachineDefaulter struct{}
+
+func (VirtualMachineDefaulter) Default(ctx context.Context, obj runtime.Object) error {
+	virtualMachine, ok := obj.(*kubevirtv1.VirtualMachine)
+	if !ok {
+		return fmt.Errorf("virtual machine defaulter did not understand object: %T", obj)
+	}
+
+	api, ok := ctx.Value(apiKey{}).(client.Client)
+	if !ok {
+		kube, err := config.GetConfig()
+		if err != nil {
+			return err
+		}
+		api, err = client.New(kube, client.Options{})
+		if err != nil {
+			return err
+		}
+	}
+
+	tempDir, err := os.MkdirTemp(".", "")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tempDir)
+
+	for i := range virtualMachine.Spec.Template.Spec.Volumes {
+		var userDataSecretRef *corev1.LocalObjectReference
+		if virtualMachine.Spec.Template.Spec.Volumes[i].CloudInitConfigDrive != nil {
+			if virtualMachine.Spec.Template.Spec.Volumes[i].CloudInitConfigDrive.UserDataSecretRef != nil {
+				userDataSecretRef = virtualMachine.Spec.Template.Spec.Volumes[i].CloudInitConfigDrive.UserDataSecretRef
+			}
+		}
+		if virtualMachine.Spec.Template.Spec.Volumes[i].CloudInitNoCloud != nil {
+			if virtualMachine.Spec.Template.Spec.Volumes[i].CloudInitNoCloud.UserDataSecretRef != nil {
+				userDataSecretRef = virtualMachine.Spec.Template.Spec.Volumes[i].CloudInitNoCloud.UserDataSecretRef
+			}
+		}
+
+		if userDataSecretRef != nil {
+			secret := &corev1.Secret{}
+			if err := api.Get(ctx, client.ObjectKey{
+				Namespace: virtualMachine.Namespace,
+				Name:      userDataSecretRef.Name,
+			}, secret); err != nil {
+				return err
+			}
+
+			defaultMode := corev1.SecretVolumeSourceDefaultMode
+			payload, err := secrets.MakePayload([]corev1.KeyToPath{
+				{
+					Key:  "userdata",
+					Path: filepath.Join(virtualMachine.Spec.Template.Spec.Volumes[i].Name, "userdata"),
+				},
+				{
+					Key:  "userData",
+					Path: filepath.Join(virtualMachine.Spec.Template.Spec.Volumes[i].Name, "userData"),
+				},
+			}, secret, &defaultMode, true)
+			if err != nil {
+				return err
+			}
+
+			w, err := util.NewAtomicWriter(tempDir, virtualMachine.Spec.Template.Spec.Volumes[i].Name)
+			if err != nil {
+				return err
+			}
+
+			if err := w.Write(payload); err != nil {
+				return err
+			}
+		}
+	}
+
+	virtualMachineCopy := virtualMachine.DeepCopyObject().(*kubevirtv1.VirtualMachine)
+	cloudInitData, err := cloudinit.ReadCloudInitVolumeDataSource(&kubevirtv1.VirtualMachineInstance{
+		Spec: virtualMachineCopy.Spec.Template.Spec,
+	}, tempDir)
+	if err != nil {
+		return err
+	}
+
+	if cloudInitData != nil {
+		var cloudConfig CloudConfig
+		if err := yaml.Unmarshal([]byte(cloudInitData.UserData), &cloudConfig); err != nil {
+			return err
+		}
+
+		var index int
+		for resourceName, resourceQuantity := range cloudConfig.InAccel {
+			for range make([]interface{}, resourceQuantity.Value()) {
+				hostDeviceExists := false
+				for i := range virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices {
+					if IsHostDevice(virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices[i], string(resourceName), index) {
+						hostDeviceExists = true
+						virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices[i] = HostDevice(string(resourceName), index)
+					}
+				}
+				if !hostDeviceExists {
+					virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices = append(virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices, HostDevice(string(resourceName), index))
+				}
+
+				index++
+			}
+		}
+	}
+
+	return nil
+}
+
 type VirtualMachineInstanceDefaulter struct{}
 
 func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.Object) error {
@@ -107,7 +217,9 @@ func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.
 	}
 
 	virtualMachineInstanceCopy := virtualMachineInstance.DeepCopyObject().(*kubevirtv1.VirtualMachineInstance)
-	cloudInitData, err := cloudinit.ReadCloudInitVolumeDataSource(virtualMachineInstanceCopy, tempDir)
+	cloudInitData, err := cloudinit.ReadCloudInitVolumeDataSource(&kubevirtv1.VirtualMachineInstance{
+		Spec: virtualMachineInstanceCopy.Spec,
+	}, tempDir)
 	if err != nil {
 		return err
 	}
