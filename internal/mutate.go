@@ -35,10 +35,10 @@ type CloudConfig struct {
 }
 
 type VirtualMachineDefaulter struct {
-	client.Client
+	client.Reader
 }
 
-func NewVirtualMachineDefaulter(api client.Client) *VirtualMachineDefaulter {
+func NewVirtualMachineDefaulter(api client.Reader) *VirtualMachineDefaulter {
 	return &VirtualMachineDefaulter{api}
 }
 
@@ -138,10 +138,11 @@ func (d *VirtualMachineDefaulter) Default(ctx context.Context, obj runtime.Objec
 
 type VirtualMachineReconciler struct {
 	*VirtualMachineDefaulter
+	client.Client
 }
 
 func NewVirtualMachineReconciler(api client.Client) *VirtualMachineReconciler {
-	return &VirtualMachineReconciler{&VirtualMachineDefaulter{api}}
+	return &VirtualMachineReconciler{&VirtualMachineDefaulter{api}, api}
 }
 
 func (r *VirtualMachineReconciler) Reconcile(ctx context.Context, o reconcile.Request) (reconcile.Result, error) {
@@ -166,10 +167,10 @@ func (r *VirtualMachineReconciler) Reconcile(ctx context.Context, o reconcile.Re
 }
 
 type VirtualMachineInstanceDefaulter struct {
-	client.Client
+	client.Reader
 }
 
-func NewVirtualMachineInstanceDefaulter(api client.Client) *VirtualMachineInstanceDefaulter {
+func NewVirtualMachineInstanceDefaulter(api client.Reader) *VirtualMachineInstanceDefaulter {
 	return &VirtualMachineInstanceDefaulter{api}
 }
 

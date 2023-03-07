@@ -38,6 +38,10 @@ func main() {
 				Aliases: []string{"d"},
 				Usage:   "enable debug output",
 			},
+			&cli.BoolFlag{
+				Name:  "enable-virtualmachine-controller",
+				Usage: "enables the Virtual Machine controller",
+			},
 		},
 		Before: func(context *cli.Context) error {
 			log.SetOutput(io.Discard)
@@ -78,13 +82,18 @@ func main() {
 				return err
 			}
 
-			if err := controllerruntime.NewControllerManagedBy(manager).For(new(kubevirtv1.VirtualMachine)).Complete(internal.NewVirtualMachineReconciler(manager.GetClient())); err != nil {
-				return err
+			if context.Bool("enable-virtualmachine-controller") {
+				if err := controllerruntime.NewControllerManagedBy(manager).For(new(kubevirtv1.VirtualMachine)).Complete(internal.NewVirtualMachineReconciler(manager.GetClient())); err != nil {
+					return err
+				}
 			}
 
-			manager.GetWebhookServer().Register("/", admission.WithCustomDefaulter(new(kubevirtv1.VirtualMachineInstance), internal.NewVirtualMachineInstanceDefaulter(manager.GetClient())))
+			manager.GetWebhookServer().Register("/", admission.WithCustomDefaulter(new(kubevirtv1.VirtualMachineInstance), internal.NewVirtualMachineInstanceDefaulter(manager.GetAPIReader())))
 
-			return manager.Start(context.Context)
+			if context.Bool("enable-virtualmachine-controller") {
+				return manager.Start(context.Context)
+			}
+			return manager.GetWebhookServer().StartStandalone(context.Context, manager.GetScheme())
 		},
 		Commands: []*cli.Command{
 			initCommand,
