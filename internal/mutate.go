@@ -5,20 +5,22 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	secrets "k8s.io/kubernetes/pkg/volume/secret"
 	"k8s.io/kubernetes/pkg/volume/util"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cloudinit "kubevirt.io/kubevirt/pkg/cloud-init"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 )
 
-func IsHostDevice(hostDevice kubevirtv1.HostDevice, deviceName string, index int) bool {
-	return hostDevice.Name == fmt.Sprintf("inaccel%d", index)
+func IsHostDevice(hostDevice kubevirtv1.HostDevice) bool {
+	return strings.HasPrefix(hostDevice.Name, "inaccel")
 }
 
 func HostDevice(deviceName string, index int) kubevirtv1.HostDevice {
@@ -32,24 +34,18 @@ type CloudConfig struct {
 	InAccel corev1.ResourceList `yaml:"inaccel"`
 }
 
-type VirtualMachineDefaulter struct{}
+type VirtualMachineDefaulter struct {
+	client.Client
+}
 
-func (VirtualMachineDefaulter) Default(ctx context.Context, obj runtime.Object) error {
+func NewVirtualMachineDefaulter(api client.Client) *VirtualMachineDefaulter {
+	return &VirtualMachineDefaulter{api}
+}
+
+func (d *VirtualMachineDefaulter) Default(ctx context.Context, obj runtime.Object) error {
 	virtualMachine, ok := obj.(*kubevirtv1.VirtualMachine)
 	if !ok {
 		return fmt.Errorf("virtual machine defaulter did not understand object: %T", obj)
-	}
-
-	api, ok := ctx.Value(apiKey{}).(client.Client)
-	if !ok {
-		kube, err := config.GetConfig()
-		if err != nil {
-			return err
-		}
-		api, err = client.New(kube, client.Options{})
-		if err != nil {
-			return err
-		}
 	}
 
 	tempDir, err := os.MkdirTemp(".", "")
@@ -73,7 +69,7 @@ func (VirtualMachineDefaulter) Default(ctx context.Context, obj runtime.Object) 
 
 		if userDataSecretRef != nil {
 			secret := &corev1.Secret{}
-			if err := api.Get(ctx, client.ObjectKey{
+			if err := d.Get(ctx, client.ObjectKey{
 				Namespace: virtualMachine.Namespace,
 				Name:      userDataSecretRef.Name,
 			}, secret); err != nil {
@@ -120,46 +116,67 @@ func (VirtualMachineDefaulter) Default(ctx context.Context, obj runtime.Object) 
 			return err
 		}
 
+		var hostDevices []kubevirtv1.HostDevice
+		for i := range virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices {
+			if !IsHostDevice(virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices[i]) {
+				hostDevices = append(hostDevices, virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices[i])
+			}
+		}
 		var index int
 		for resourceName, resourceQuantity := range cloudConfig.InAccel {
 			for range make([]interface{}, resourceQuantity.Value()) {
-				hostDeviceExists := false
-				for i := range virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices {
-					if IsHostDevice(virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices[i], string(resourceName), index) {
-						hostDeviceExists = true
-						virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices[i] = HostDevice(string(resourceName), index)
-					}
-				}
-				if !hostDeviceExists {
-					virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices = append(virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices, HostDevice(string(resourceName), index))
-				}
+				hostDevices = append(hostDevices, HostDevice(string(resourceName), index))
 
 				index++
 			}
 		}
+		virtualMachine.Spec.Template.Spec.Domain.Devices.HostDevices = hostDevices
 	}
 
 	return nil
 }
 
-type VirtualMachineInstanceDefaulter struct{}
+type VirtualMachineReconciler struct {
+	*VirtualMachineDefaulter
+}
 
-func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.Object) error {
+func NewVirtualMachineReconciler(api client.Client) *VirtualMachineReconciler {
+	return &VirtualMachineReconciler{&VirtualMachineDefaulter{api}}
+}
+
+func (r *VirtualMachineReconciler) Reconcile(ctx context.Context, o reconcile.Request) (reconcile.Result, error) {
+	vm := &kubevirtv1.VirtualMachine{}
+
+	if err := r.Get(ctx, o.NamespacedName, vm); err != nil {
+		if errors.IsNotFound(err) {
+			return reconcile.Result{}, nil
+		}
+		return reconcile.Result{}, err
+	}
+
+	if err := r.Default(ctx, vm); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	if err := r.Update(ctx, vm); err != nil {
+		return reconcile.Result{}, err
+	}
+
+	return reconcile.Result{}, nil
+}
+
+type VirtualMachineInstanceDefaulter struct {
+	client.Client
+}
+
+func NewVirtualMachineInstanceDefaulter(api client.Client) *VirtualMachineInstanceDefaulter {
+	return &VirtualMachineInstanceDefaulter{api}
+}
+
+func (d *VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.Object) error {
 	virtualMachineInstance, ok := obj.(*kubevirtv1.VirtualMachineInstance)
 	if !ok {
 		return fmt.Errorf("virtual machine instance defaulter did not understand object: %T", obj)
-	}
-
-	api, ok := ctx.Value(apiKey{}).(client.Client)
-	if !ok {
-		kube, err := config.GetConfig()
-		if err != nil {
-			return err
-		}
-		api, err = client.New(kube, client.Options{})
-		if err != nil {
-			return err
-		}
 	}
 
 	tempDir, err := os.MkdirTemp(".", "")
@@ -183,7 +200,7 @@ func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.
 
 		if userDataSecretRef != nil {
 			secret := &corev1.Secret{}
-			if err := api.Get(ctx, client.ObjectKey{
+			if err := d.Get(ctx, client.ObjectKey{
 				Namespace: virtualMachineInstance.Namespace,
 				Name:      userDataSecretRef.Name,
 			}, secret); err != nil {
@@ -230,23 +247,21 @@ func (VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runtime.
 			return err
 		}
 
+		var hostDevices []kubevirtv1.HostDevice
+		for i := range virtualMachineInstance.Spec.Domain.Devices.HostDevices {
+			if !IsHostDevice(virtualMachineInstance.Spec.Domain.Devices.HostDevices[i]) {
+				hostDevices = append(hostDevices, virtualMachineInstance.Spec.Domain.Devices.HostDevices[i])
+			}
+		}
 		var index int
 		for resourceName, resourceQuantity := range cloudConfig.InAccel {
 			for range make([]interface{}, resourceQuantity.Value()) {
-				hostDeviceExists := false
-				for i := range virtualMachineInstance.Spec.Domain.Devices.HostDevices {
-					if IsHostDevice(virtualMachineInstance.Spec.Domain.Devices.HostDevices[i], string(resourceName), index) {
-						hostDeviceExists = true
-						virtualMachineInstance.Spec.Domain.Devices.HostDevices[i] = HostDevice(string(resourceName), index)
-					}
-				}
-				if !hostDeviceExists {
-					virtualMachineInstance.Spec.Domain.Devices.HostDevices = append(virtualMachineInstance.Spec.Domain.Devices.HostDevices, HostDevice(string(resourceName), index))
-				}
+				hostDevices = append(hostDevices, HostDevice(string(resourceName), index))
 
 				index++
 			}
 		}
+		virtualMachineInstance.Spec.Domain.Devices.HostDevices = hostDevices
 	}
 
 	return nil
