@@ -70,9 +70,9 @@ func main() {
 				return err
 			}
 
+			controllerruntime.SetLogger(logrusr.New(logrus.StandardLogger()))
 			manager, err := controllerruntime.NewManager(config, controllerruntime.Options{
-				Logger: logrusr.New(logrus.StandardLogger()),
-				Port:   443,
+				Port: 443,
 			})
 			if err != nil {
 				return err
@@ -88,12 +88,12 @@ func main() {
 				}
 			}
 
-			manager.GetWebhookServer().Register("/", admission.WithCustomDefaulter(new(kubevirtv1.VirtualMachineInstance), internal.NewVirtualMachineInstanceDefaulter(manager.GetAPIReader())))
+			manager.GetWebhookServer().Register("/", admission.WithCustomDefaulter(manager.GetScheme(), new(kubevirtv1.VirtualMachineInstance), internal.NewVirtualMachineInstanceDefaulter(manager.GetAPIReader())))
 
 			if context.Bool("enable-virtualmachine-controller") {
 				return manager.Start(context.Context)
 			}
-			return manager.GetWebhookServer().StartStandalone(context.Context, manager.GetScheme())
+			return manager.GetWebhookServer().Start(context.Context)
 		},
 		Commands: []*cli.Command{
 			initCommand,

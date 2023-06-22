@@ -96,7 +96,7 @@ func (d *VirtualMachineDefaulter) Default(ctx context.Context, obj runtime.Objec
 				return err
 			}
 
-			if err := w.Write(payload); err != nil {
+			if err := w.Write(payload, nil); err != nil {
 				return err
 			}
 		}
@@ -228,7 +228,7 @@ func (d *VirtualMachineInstanceDefaulter) Default(ctx context.Context, obj runti
 				return err
 			}
 
-			if err := w.Write(payload); err != nil {
+			if err := w.Write(payload, nil); err != nil {
 				return err
 			}
 		}
