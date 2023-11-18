@@ -12,6 +12,7 @@ import (
 	"github.com/urfave/cli/v2"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	controllerruntime "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
@@ -72,7 +73,9 @@ func main() {
 
 			controllerruntime.SetLogger(logrusr.New(logrus.StandardLogger()))
 			manager, err := controllerruntime.NewManager(config, controllerruntime.Options{
-				Port: 443,
+				WebhookServer: webhook.NewServer(webhook.Options{
+					Port: 443,
+				}),
 			})
 			if err != nil {
 				return err
